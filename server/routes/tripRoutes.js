@@ -2,89 +2,123 @@
 const express = require("express");
 const mongoose = require("mongoose");
 
+const Trip = require("../models/Trip");
 const Bus = require("../models/Bus");
 const Route = require("../models/Route");
-const Trip = require("../models/Trip");
 
 const router = express.Router();
 
-
-/*
-  GET /api/trips/search?from=KAR&to=MAK&date=2026-10-28
-
-  Search for trips between two stops on a selected date.
-*/
-router.get("/search", async (req, res) => {
+// ======================================================
+// GET ALL TRIPS
+// GET /api/trips
+// ======================================================
+router.get("/", async (req, res) => {
   try {
-    const from = String(req.query.from || "").trim().toUpperCase();
-    const to = String(req.query.to || "").trim().toUpperCase();
-    const date = String(req.query.date || "").trim();
-
-    // 1. Validate the search inputs
-    if (!from || !to || !date) {
-      return res.status(400).json({
-        message: "Please provide from, to, and date."
-      });
-    }
-
-    if (from === to) {
-      return res.status(400).json({
-        message: "Origin and destination must be different."
-      });
-    }
-
-    // Require a date in YYYY-MM-DD format
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({
-        message: "Date must use YYYY-MM-DD format."
-      });
-    }
-
-    // Interpret the selected date as Sri Lankan local time (UTC+05:30)
-    const start = new Date(`${date}T00:00:00+05:30`);
-
-    if (
-      Number.isNaN(start.getTime()) ||
-      start.toISOString().slice(0, 10) !==
-        new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10)
-    ) {
-      return res.status(400).json({
-        message: "Please provide a valid calendar date."
-      });
-    }
-
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 1);
-
-    // 2. Get trips scheduled to start on the selected date
-    const trips = await Trip.find({
-      departureTime: { $gte: start, $lt: end },
-      status: { $in: ["SCHEDULED", "IN_PROGRESS"] }
-    })
-      .populate(
-        "bus",
-        "registrationNumber busType capacity status"
-      )
-      .populate("route", "routeName stops status")
+    const trips = await Trip.find()
+      .populate("bus")
+      .populate("route")
       .sort({ departureTime: 1 });
 
-    // 3. Keep only trips that match the requested stops
+    res.status(200).json(trips);
+  } catch (error) {
+    console.error("Get trips error:", error.message);
+
+    res.status(500).json({
+      message: "Failed to retrieve trips.",
+    });
+  }
+});
+
+// ======================================================
+// SEARCH TIMETABLE
+// GET /api/trips/search?from=GAL&to=MAK&date=2026-11-01
+// ======================================================
+router.get("/search", async (req, res) => {
+  try {
+    const { from, to, date } = req.query;
+
+    // Check required query parameters
+    if (!from || !to || !date) {
+      return res.status(400).json({
+        message: "Please provide from, to, and date.",
+      });
+    }
+
+    // Origin and destination must be different
+    if (from === to) {
+      return res.status(400).json({
+        message: "Origin and destination cannot be the same.",
+      });
+    }
+
+    // Validate YYYY-MM-DD format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        message: "Date must use YYYY-MM-DD format.",
+      });
+    }
+
+    // Validate that the date actually exists
+    const [year, month, day] = date.split("-").map(Number);
+
+    const isValidDate =
+      year >= 1000 &&
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+    if (!isValidDate) {
+      return res.status(400).json({
+        message: "Please provide a valid calendar date.",
+      });
+    }
+
+    // Sri Lankan local day starts at midnight UTC+05:30
+    const start = new Date(`${date}T00:00:00+05:30`);
+    const end = new Date(start);
+
+    // Calculate the beginning of the next local day
+    end.setUTCDate(end.getUTCDate() + 1);
+
+    // Find trips departing during the selected Sri Lankan date
+    const trips = await Trip.find({
+      departureTime: {
+        $gte: start,
+        $lt: end,
+      },
+      status: {
+        $in: ["SCHEDULED", "IN_PROGRESS"],
+      },
+    })
+      .populate("bus")
+      .populate("route");
+
     const results = [];
 
     for (const trip of trips) {
-      const bus = trip.bus;
-      const route = trip.route;
+      // Skip trips with missing bus or route information
+      if (!trip.bus || !trip.route) {
+        continue;
+      }
 
-      if (!bus || !route) continue;
-      if (bus.status !== "ACTIVE") continue;
-      if (route.status !== "ACTIVE") continue;
+      // Skip inactive buses and routes
+      if (
+        trip.bus.status !== "ACTIVE" ||
+        trip.route.status !== "ACTIVE"
+      ) {
+        continue;
+      }
 
-      const fromIndex = route.stops.findIndex(
-        stop => stop.stopCode.toUpperCase() === from
+      const stops = trip.route.stops || [];
+
+      // Find origin and destination in the route
+      const fromIndex = stops.findIndex(
+        (stop) => stop.stopCode === from
       );
 
-      const toIndex = route.stops.findIndex(
-        stop => stop.stopCode.toUpperCase() === to
+      const toIndex = stops.findIndex(
+        (stop) => stop.stopCode === to
       );
 
       // Both stops must exist, and origin must come first
@@ -96,73 +130,122 @@ router.get("/search", async (req, res) => {
         continue;
       }
 
-      const departure = trip.stopTimes[fromIndex];
-      const arrival = trip.stopTimes[toIndex];
+      // Get the scheduled times for the selected stops
+      const fromStopTime = trip.stopTimes[fromIndex];
+      const toStopTime = trip.stopTimes[toIndex];
 
+      if (!fromStopTime || !toStopTime) {
+        continue;
+      }
+
+      const departureAt = fromStopTime.departureTime;
+      const arrivalAt = toStopTime.arrivalTime;
+
+      // A valid journey needs both times
+      if (!departureAt || !arrivalAt) {
+        continue;
+      }
+
+      // Return only trips whose selected departure falls
+      // within the requested Sri Lankan calendar date
       if (
-        !departure ||
-        !arrival ||
-        !departure.departureTime ||
-        !arrival.arrivalTime
+        new Date(departureAt) < start ||
+        new Date(departureAt) >= end
       ) {
         continue;
       }
 
-      // 4. Return the useful information for the passenger
       results.push({
         tripId: trip._id,
+
         bus: {
-          registrationNumber: bus.registrationNumber,
-          busType: bus.busType,
-          capacity: bus.capacity
+          id: trip.bus._id,
+          registrationNumber: trip.bus.registrationNumber,
+          busType: trip.bus.busType,
+          capacity: trip.bus.capacity,
         },
-        routeName: route.routeName,
+
+        routeName: trip.route.routeName,
+
         from: {
-          stopCode: from,
-          name: route.stops[fromIndex].name,
-          departureTime: departure.departureTime
+          stopCode: stops[fromIndex].stopCode,
+          name: stops[fromIndex].name,
+          departureTime: departureAt,
         },
+
         to: {
-          stopCode: to,
-          name: route.stops[toIndex].name,
-          arrivalTime: arrival.arrivalTime
+          stopCode: stops[toIndex].stopCode,
+          name: stops[toIndex].name,
+          arrivalTime: arrivalAt,
         },
+
         fullRouteFare: trip.fare,
-        status: trip.status
+        status: trip.status,
       });
     }
 
+    // Show the earliest departures first
+    results.sort(
+      (a, b) =>
+        new Date(a.from.departureTime) -
+        new Date(b.from.departureTime)
+    );
+
     return res.status(200).json({
+      date,
+      from,
+      to,
       count: results.length,
-      results
+      trips: results,
     });
   } catch (error) {
-    console.error("Trip search error:", error);
+    console.error("Search trips error:", error.message);
 
     return res.status(500).json({
-      message: "Failed to search trips."
+      message: "Failed to search for trips.",
     });
   }
 });
 
-
-// GET: List trips
-router.get("/", async (req, res) => {
+// ======================================================
+// GET ONE TRIP BY ID
+// GET /api/trips/:id
+// Keep this route AFTER /search
+// ======================================================
+router.get("/:id", async (req, res) => {
   try {
-    const trips = await Trip.find()
-      .populate("bus")
-      .populate("route")
-      .sort({ departureTime: 1 });
+    const { id } = req.params;
 
-    res.json(trips);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid trip ID.",
+      });
+    }
+
+    const trip = await Trip.findById(id)
+      .populate("bus")
+      .populate("route");
+
+    if (!trip) {
+      return res.status(404).json({
+        message: "Trip not found.",
+      });
+    }
+
+    return res.status(200).json(trip);
   } catch (error) {
-    res.status(500).json({
-      message: "Failed to retrieve trips"
+    console.error("Get trip error:", error.message);
+
+    return res.status(500).json({
+      message: "Failed to retrieve trip.",
     });
   }
 });
 
-// POST: Create a trip
+// ======================================================
+// CREATE A TRIP
+// POST /api/trips
+// ======================================================
 router.post("/", async (req, res) => {
   try {
     const {
@@ -171,125 +254,184 @@ router.post("/", async (req, res) => {
       departureTime,
       arrivalTime,
       fare,
-      stopTimes
+      stopTimes,
     } = req.body;
 
+    // Check required fields
     if (
-      !mongoose.isValidObjectId(bus) ||
-      !mongoose.isValidObjectId(route)
-    ) {
-      return res.status(400).json({
-        message: "Valid bus and route IDs are required"
-      });
-    }
-
-    const selectedBus = await Bus.findById(bus);
-    const selectedRoute = await Route.findById(route);
-
-    if (!selectedBus || selectedBus.status !== "ACTIVE") {
-      return res.status(400).json({
-        message: "Bus not found or not active"
-      });
-    }
-
-    if (!selectedRoute || selectedRoute.status !== "ACTIVE") {
-      return res.status(400).json({
-        message: "Route not found or not active"
-      });
-    }
-
-    const start = new Date(departureTime);
-    const end = new Date(arrivalTime);
-
-    if (
+      !bus ||
+      !route ||
       !departureTime ||
       !arrivalTime ||
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime()) ||
-      end <= start
+      fare === undefined ||
+      !Array.isArray(stopTimes)
     ) {
       return res.status(400).json({
-        message: "Valid departure and arrival times are required"
+        message:
+          "Please provide bus, route, departureTime, arrivalTime, fare, and stopTimes.",
       });
     }
 
-    if (!Array.isArray(stopTimes)) {
+    // Validate MongoDB IDs
+    if (
+      !mongoose.Types.ObjectId.isValid(bus) ||
+      !mongoose.Types.ObjectId.isValid(route)
+    ) {
       return res.status(400).json({
-        message: "Stop times must be an array"
+        message: "Invalid bus ID or route ID.",
       });
     }
 
-    const routeStops = selectedRoute.stops;
+    // Validate date values
+    const tripDeparture = new Date(departureTime);
+    const tripArrival = new Date(arrivalTime);
+
+    if (
+      Number.isNaN(tripDeparture.getTime()) ||
+      Number.isNaN(tripArrival.getTime())
+    ) {
+      return res.status(400).json({
+        message: "Please provide valid departure and arrival times.",
+      });
+    }
+
+    if (tripArrival <= tripDeparture) {
+      return res.status(400).json({
+        message: "Arrival time must be after departure time.",
+      });
+    }
+
+    // Validate fare
+    if (
+      typeof fare !== "number" ||
+      !Number.isFinite(fare) ||
+      fare < 0
+    ) {
+      return res.status(400).json({
+        message: "Fare must be a non-negative number.",
+      });
+    }
+
+    // Load bus and route
+    const busDocument = await Bus.findById(bus);
+    const routeDocument = await Route.findById(route);
+
+    if (!busDocument) {
+      return res.status(404).json({
+        message: "Bus not found.",
+      });
+    }
+
+    if (!routeDocument) {
+      return res.status(404).json({
+        message: "Route not found.",
+      });
+    }
+
+    if (
+      busDocument.status !== "ACTIVE" ||
+      routeDocument.status !== "ACTIVE"
+    ) {
+      return res.status(400).json({
+        message: "The bus and route must both be active.",
+      });
+    }
+
+    // There must be one stop-time entry per route stop
+    const routeStops = routeDocument.stops;
 
     if (stopTimes.length !== routeStops.length) {
       return res.status(400).json({
-        message: "A scheduled time is required for every route stop"
+        message:
+          "The number of stopTimes must match the number of route stops.",
       });
     }
 
+    // Ensure stop codes follow the route's stop order
     for (let i = 0; i < routeStops.length; i++) {
       if (stopTimes[i].stopCode !== routeStops[i].stopCode) {
         return res.status(400).json({
-          message: "Stop times must follow the route stop order"
+          message:
+            "stopTimes must follow the exact stop order defined in the route.",
         });
       }
+    }
 
-      for (const field of ["arrivalTime", "departureTime"]) {
-        const value = stopTimes[i][field];
+    // Validate stop times and their chronological order
+    let previousTime = tripDeparture;
 
-        if (value !== null && value !== undefined) {
-          const time = new Date(value);
+    for (let i = 0; i < stopTimes.length; i++) {
+      const stopTime = stopTimes[i];
 
-          if (
-            Number.isNaN(time.getTime()) ||
-            time < start ||
-            time > end
-          ) {
-            return res.status(400).json({
-              message: `Invalid ${field} for stop ${routeStops[i].name}`
-            });
-          }
-        }
-      }
-
-      if (i === 0 && !stopTimes[i].departureTime) {
+      if (!stopTime || !stopTime.stopCode) {
         return res.status(400).json({
-          message: "The first stop needs a departure time"
+          message: `Invalid stopTimes entry at index ${i}.`,
         });
       }
+
+      const arrival = stopTime.arrivalTime
+        ? new Date(stopTime.arrivalTime)
+        : null;
+
+      const departure = stopTime.departureTime
+        ? new Date(stopTime.departureTime)
+        : null;
 
       if (
-        i === routeStops.length - 1 &&
-        !stopTimes[i].arrivalTime
+        (arrival && Number.isNaN(arrival.getTime())) ||
+        (departure && Number.isNaN(departure.getTime()))
       ) {
         return res.status(400).json({
-          message: "The last stop needs an arrival time"
+          message: `Invalid time at stop ${stopTime.stopCode}.`,
         });
+      }
+
+      if (arrival && arrival < previousTime) {
+        return res.status(400).json({
+          message:
+            `Arrival time at ${stopTime.stopCode} ` +
+            "cannot be earlier than the previous time.",
+        });
+      }
+
+      if (arrival && departure && departure < arrival) {
+        return res.status(400).json({
+          message:
+            `Departure time at ${stopTime.stopCode} ` +
+            "cannot be earlier than its arrival time.",
+        });
+      }
+
+      if (departure) {
+        previousTime = departure;
+      } else if (arrival) {
+        previousTime = arrival;
       }
     }
 
-    const trip = await Trip.create({
+    // Create the trip
+    const newTrip = await Trip.create({
       bus,
       route,
-      departureTime: start,
-      arrivalTime: end,
+      departureTime: tripDeparture,
+      arrivalTime: tripArrival,
       fare,
-      stopTimes
+      stopTimes,
     });
 
-    res.status(201).json({
-      message: "Trip created successfully",
-      trip
+    const populatedTrip = await Trip.findById(newTrip._id)
+      .populate("bus")
+      .populate("route");
+
+    return res.status(201).json({
+      message: "Trip created successfully.",
+      trip: populatedTrip,
     });
   } catch (error) {
-    if (error.name === "ValidationError") {
-      return res.status(400).json({
-        message: error.message
-      });
-    }
+    console.error("Create trip error:", error.message);
 
-    res.status(500).json({
-      message: "Failed to create trip"
+    return res.status(500).json({
+      message: "Failed to create trip.",
     });
   }
 });
