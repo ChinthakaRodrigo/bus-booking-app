@@ -5,9 +5,10 @@ import BookingForm from "./components/BookingForm";
 
 const API_URL = "http://localhost:5000/api";
 
-// Get today's date in local time, avoiding UTC date shifts.
+// Get today's date using local time.
 function getToday() {
   const today = new Date();
+
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, "0");
   const day = String(today.getDate()).padStart(2, "0");
@@ -15,10 +16,17 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+// Format time using Sri Lankan time.
 function formatTime(dateString) {
   if (!dateString) return "Time unavailable";
 
-  return new Date(dateString).toLocaleTimeString("en-LK", {
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid time";
+  }
+
+  return date.toLocaleTimeString("en-LK", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,
@@ -37,6 +45,7 @@ function App() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+
   const [selectedTrip, setSelectedTrip] = useState(null);
 
   // Load available stops from the backend.
@@ -51,14 +60,19 @@ function App() {
 
         const routes = await response.json();
 
-        // Collect unique stops from all routes.
+        if (!Array.isArray(routes)) {
+          throw new Error("Invalid routes response from server.");
+        }
+
         const stopMap = new Map();
 
         routes.forEach((route) => {
           if (route.status !== "ACTIVE") return;
 
           (route.stops || []).forEach((stop) => {
-            stopMap.set(stop.stopCode, stop);
+            if (stop.stopCode && stop.name) {
+              stopMap.set(stop.stopCode, stop);
+            }
           });
         });
 
@@ -79,13 +93,14 @@ function App() {
     loadStops();
   }, []);
 
-  // Search for trips matching the passenger's selections.
+  // Search for buses.
   async function handleSearch(event) {
     event.preventDefault();
 
     setError("");
     setTrips([]);
     setSearched(false);
+    setSelectedTrip(null);
 
     if (!from || !to || !date) {
       setError("Please select your origin, destination, and date.");
@@ -116,26 +131,29 @@ function App() {
         throw new Error(data.message || "Search failed.");
       }
 
-      setTrips(data.trips || []);
+      setTrips(Array.isArray(data.trips) ? data.trips : []);
       setSearched(true);
     } catch (err) {
       setError(
-        `${err.message} Check that the backend is running and the API is available.`
+        `${err.message} Check that your backend is running.`
       );
     } finally {
       setSearching(false);
     }
   }
 
+  // Get a stop's display name.
   function getStopName(stopCode) {
     return (
       stops.find((stop) => stop.stopCode === stopCode)?.name ||
-      stopCode
+      stopCode ||
+      "Unknown stop"
     );
   }
 
   return (
     <div className="app">
+      {/* Navigation */}
       <header className="navbar">
         <a className="brand" href="/">
           <span className="brand-icon">B</span>
@@ -145,11 +163,13 @@ function App() {
         <nav>
           <a href="#search">Find Buses</a>
           <a href="#results">Timetable</a>
+
           <button
+            type="button"
             className="nav-button"
-            onClick={() =>
-              alert("Booking will be added in the next milestone.")
-            }
+            onClick={() => {
+              alert("My Bookings page will be implemented later.");
+            }}
           >
             My Bookings
           </button>
@@ -157,9 +177,12 @@ function App() {
       </header>
 
       <main>
+        {/* Hero section */}
         <section className="hero">
           <div className="hero-content">
-            <span className="eyebrow">YOUR JOURNEY STARTS HERE</span>
+            <span className="eyebrow">
+              YOUR JOURNEY STARTS HERE
+            </span>
 
             <h1>
               Every journey,
@@ -181,31 +204,38 @@ function App() {
             <div className="road">
               <div className="road-line" />
             </div>
+
             <div className="bus-illustration">
               <div className="bus-window">
                 <span />
                 <span />
                 <span />
               </div>
+
               <div className="bus-body-line" />
               <div className="bus-wheel wheel-one" />
               <div className="bus-wheel wheel-two" />
             </div>
+
             <div className="location-pin pin-one">●</div>
             <div className="location-pin pin-two">●</div>
           </div>
         </section>
 
+        {/* Search section */}
         <section className="search-section" id="search">
           <div className="section-heading">
             <span className="eyebrow">PLAN YOUR TRIP</span>
             <h2>Where are you going?</h2>
-            <p>Choose your route and travel date to see available buses.</p>
+            <p>
+              Choose your route and travel date to see available buses.
+            </p>
           </div>
 
           <form className="search-card" onSubmit={handleSearch}>
             <div className="field">
               <label htmlFor="from">From</label>
+
               <select
                 id="from"
                 value={from}
@@ -227,6 +257,7 @@ function App() {
 
             <div className="field">
               <label htmlFor="to">To</label>
+
               <select
                 id="to"
                 value={to}
@@ -246,6 +277,7 @@ function App() {
 
             <div className="field">
               <label htmlFor="date">Travel date</label>
+
               <input
                 id="date"
                 type="date"
@@ -259,15 +291,24 @@ function App() {
             <button
               className="search-button"
               type="submit"
-              disabled={searching || loadingStops || stops.length === 0}
+              disabled={
+                searching ||
+                loadingStops ||
+                stops.length === 0
+              }
             >
               {searching ? "Searching..." : "Search Buses →"}
             </button>
           </form>
 
-          {error && <div className="error-message">{error}</div>}
+          {error && (
+            <div className="error-message">
+              {error}
+            </div>
+          )}
         </section>
 
+        {/* Search results */}
         <section className="results-section" id="results">
           <div className="results-heading">
             <div>
@@ -286,7 +327,9 @@ function App() {
             <div className="empty-state">
               <div className="empty-icon">↗</div>
               <h3>Your next journey awaits</h3>
-              <p>Choose your stops and date to view bus schedules.</p>
+              <p>
+                Choose your stops and date to view bus schedules.
+              </p>
             </div>
           )}
 
@@ -309,20 +352,31 @@ function App() {
 
           <div className="trip-list">
             {trips.map((trip) => (
-              <article className="trip-card" key={trip.tripId}>
+              <article
+                className="trip-card"
+                key={trip.tripId}
+              >
                 <div className="trip-top">
                   <div>
                     <span className="bus-type">
-                      {trip.bus.busType.replace("_", " ")}
+                      {(trip.bus?.busType || "NORMAL").replaceAll("_", " ")}
                     </span>
-                    <h3>{trip.bus.registrationNumber}</h3>
-                    <p className="route-name">{trip.routeName}</p>
+
+                    <h3>
+                      {trip.bus?.registrationNumber || "Unknown bus"}
+                    </h3>
+
+                    <p className="route-name">
+                      {trip.routeName || "Unknown route"}
+                    </p>
                   </div>
 
                   <div className="fare">
                     <span>Full route fare</span>
+
                     <strong>
-                      Rs. {Number(trip.fullRouteFare).toLocaleString("en-LK")}
+                      Rs.{" "}
+                      {Number(trip.fullRouteFare || 0).toLocaleString("en-LK")}
                     </strong>
                   </div>
                 </div>
@@ -330,9 +384,13 @@ function App() {
                 <div className="journey-times">
                   <div>
                     <span className="time">
-                      {formatTime(trip.from.departureTime)}
+                      {formatTime(trip.from?.departureTime)}
                     </span>
-                    <strong>{getStopName(trip.from.stopCode)}</strong>
+
+                    <strong>
+                      {getStopName(trip.from?.stopCode)}
+                    </strong>
+
                     <span className="time-label">Departure</span>
                   </div>
 
@@ -344,9 +402,13 @@ function App() {
 
                   <div className="destination-time">
                     <span className="time">
-                      {formatTime(trip.to.arrivalTime)}
+                      {formatTime(trip.to?.arrivalTime)}
                     </span>
-                    <strong>{getStopName(trip.to.stopCode)}</strong>
+
+                    <strong>
+                      {getStopName(trip.to?.stopCode)}
+                    </strong>
+
                     <span className="time-label">Arrival</span>
                   </div>
                 </div>
@@ -354,16 +416,13 @@ function App() {
                 <div className="trip-bottom">
                   <span className="status">
                     <span className="status-dot" />
-                    {trip.status.replace("_", " ")}
+                    {(trip.status || "SCHEDULED").replaceAll("_", " ")}
                   </span>
 
                   <button
+                    type="button"
                     className="book-button"
-                    onClick={() =>
-                      alert(
-                        "Booking will be implemented in the next milestone."
-                      )
-                    }
+                    onClick={() => setSelectedTrip(trip)}
                   >
                     Book this bus
                   </button>
@@ -374,14 +433,26 @@ function App() {
         </section>
       </main>
 
+      {/* Footer */}
       <footer className="footer">
         <a className="brand footer-brand" href="/">
           <span className="brand-icon">B</span>
           <span>BusGo</span>
         </a>
+
         <p>Making every journey a little easier.</p>
         <span>BusGo · Learning project</span>
       </footer>
+
+      {/* Booking form */}
+      {selectedTrip && (
+        <BookingForm
+          trip={selectedTrip}
+          from={from}
+          to={to}
+          onClose={() => setSelectedTrip(null)}
+        />
+      )}
     </div>
   );
 }

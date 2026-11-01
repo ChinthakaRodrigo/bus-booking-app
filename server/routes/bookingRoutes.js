@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
 const Trip = require("../models/Trip");
 
+
 const router = express.Router();
 
 // ======================================================
@@ -37,6 +38,110 @@ router.get("/", async (req, res) => {
     });
   }
 });
+
+
+// GET /api/bookings/availability
+// Returns occupied seats for a selected journey section.
+router.get("/availability", async (req, res) => {
+  try {
+    const { tripId, from, to } = req.query;
+
+    // Validate required parameters.
+    if (!tripId || !from || !to) {
+      return res.status(400).json({
+        message: "tripId, from, and to are required.",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(tripId)) {
+      return res.status(400).json({
+        message: "Invalid trip ID.",
+      });
+    }
+
+    if (from === to) {
+      return res.status(400).json({
+        message: "Origin and destination must be different.",
+      });
+    }
+
+    // Find trip and its route.
+    const trip = await Trip.findById(tripId).populate("route");
+
+    if (!trip || !trip.route) {
+      return res.status(404).json({
+        message: "Trip or route not found.",
+      });
+    }
+
+    const stops = trip.route.stops || [];
+
+    const fromIndex = stops.findIndex(
+      (stop) => stop.stopCode === from
+    );
+
+    const toIndex = stops.findIndex(
+      (stop) => stop.stopCode === to
+    );
+
+    // Validate journey direction.
+    if (
+      fromIndex === -1 ||
+      toIndex === -1 ||
+      fromIndex >= toIndex
+    ) {
+      return res.status(400).json({
+        message: "Invalid journey section.",
+      });
+    }
+
+    // Get active bookings for this trip.
+    const bookings = await Booking.find({
+      trip: tripId,
+      status: { $in: ["PENDING", "CONFIRMED"] },
+    }).select("seatNumber fromStopCode toStopCode");
+
+    // Check whether each existing booking overlaps this journey.
+    const occupiedSeats = [];
+
+    for (const booking of bookings) {
+      const bookedFromIndex = stops.findIndex(
+        (stop) => stop.stopCode === booking.fromStopCode
+      );
+
+      const bookedToIndex = stops.findIndex(
+        (stop) => stop.stopCode === booking.toStopCode
+      );
+
+      if (bookedFromIndex === -1 || bookedToIndex === -1) {
+        continue;
+      }
+
+      // Two journeys overlap if their route sections intersect.
+      const overlaps =
+        bookedFromIndex < toIndex &&
+        fromIndex < bookedToIndex;
+
+      if (overlaps && !occupiedSeats.includes(booking.seatNumber)) {
+        occupiedSeats.push(booking.seatNumber);
+      }
+    }
+
+    return res.status(200).json({
+      tripId,
+      from,
+      to,
+      occupiedSeats,
+    });
+  } catch (error) {
+    console.error("Seat availability error:", error);
+
+    return res.status(500).json({
+      message: "Could not check seat availability.",
+    });
+  }
+});
+
 
 // ======================================================
 // GET ONE BOOKING
