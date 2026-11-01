@@ -25,9 +25,15 @@ router.post("/register", async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    if (!name || !email || !password) {
+    if (
+      typeof name !== "string" ||
+      name.trim().length < 2 ||
+      typeof email !== "string" ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
+      typeof password !== "string"
+    ) {
       return res.status(400).json({
-        message: "Name, email and password are required.",
+        message: "Provide a name, valid email, and password.",
       });
     }
 
@@ -51,16 +57,14 @@ router.post("/register", async (req, res) => {
 
     // Hash the password before saving.
     const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Public registration always creates a passenger.
-    const user = await User.create({
+    const user = new User({
       name: name.trim(),
       email: normalizedEmail,
       password: hashedPassword,
-      role: "PASSENGER",
+      role: "USER",
     });
-
     const token = generateToken(user);
+    await user.save();
 
     return res.status(201).json({
       message: "Registration successful.",
@@ -92,9 +96,14 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (
+      typeof email !== "string" ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return res.status(400).json({
-        message: "Email and password are required.",
+        message: "Provide a valid email and password.",
       });
     }
 

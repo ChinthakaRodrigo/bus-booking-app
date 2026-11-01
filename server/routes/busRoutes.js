@@ -2,6 +2,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Bus = require("../models/Bus");
+const { protect, authorizeRoles } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // POST: Add a new bus
-router.post("/", async (req, res) => {
+router.post("/", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     const { registrationNumber, busType, capacity } = req.body;
 
@@ -70,7 +71,7 @@ router.post("/", async (req, res) => {
 });
 
 // PUT: Update a bus
-router.put("/:id", async (req, res) => {
+router.put("/:id", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(400).json({ message: "Invalid bus ID" });
@@ -104,7 +105,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // PATCH: Change bus status
-router.patch("/:id/status", async (req, res) => {
+router.patch("/:id/status", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(400).json({ message: "Invalid bus ID" });

@@ -5,6 +5,8 @@ const mongoose = require("mongoose");
 const Trip = require("../models/Trip");
 const Bus = require("../models/Bus");
 const Route = require("../models/Route");
+const User = require("../models/User");
+const { protect, authorizeRoles } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -17,6 +19,7 @@ router.get("/", async (req, res) => {
     const trips = await Trip.find()
       .populate("bus")
       .populate("route")
+      .populate("driver", "name")
       .sort({ departureTime: 1 });
 
     res.status(200).json(trips);
@@ -181,6 +184,8 @@ router.get("/search", async (req, res) => {
 
         fullRouteFare: trip.fare,
         status: trip.status,
+        currentStopCode: trip.currentStopCode,
+        locationUpdatedAt: trip.locationUpdatedAt,
       });
     }
 
@@ -207,10 +212,24 @@ router.get("/search", async (req, res) => {
   }
 });
 
+// GET /api/trips/mine - trips assigned to the signed-in driver.
+router.get("/mine", protect, authorizeRoles("DRIVER"), async (req, res) => {
+  try {
+    const trips = await Trip.find({ driver: req.user.id })
+      .populate("bus")
+      .populate("route")
+      .sort({ departureTime: 1 });
+
+    return res.status(200).json(trips);
+  } catch (error) {
+    console.error("Get driver trips error:", error.message);
+    return res.status(500).json({ message: "Failed to retrieve assigned trips." });
+  }
+});
+
 // ======================================================
 // GET ONE TRIP BY ID
 // GET /api/trips/:id
-// Keep this route AFTER /search
 // ======================================================
 router.get("/:id", async (req, res) => {
   try {
@@ -224,7 +243,8 @@ router.get("/:id", async (req, res) => {
 
     const trip = await Trip.findById(id)
       .populate("bus")
-      .populate("route");
+      .populate("route")
+      .select("-driver");
 
     if (!trip) {
       return res.status(404).json({
@@ -246,7 +266,7 @@ router.get("/:id", async (req, res) => {
 // CREATE A TRIP
 // POST /api/trips
 // ======================================================
-router.post("/", async (req, res) => {
+router.post("/", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     const {
       bus,
@@ -255,6 +275,7 @@ router.post("/", async (req, res) => {
       arrivalTime,
       fare,
       stopTimes,
+      driver,
     } = req.body;
 
     // Check required fields
@@ -275,7 +296,8 @@ router.post("/", async (req, res) => {
     // Validate MongoDB IDs
     if (
       !mongoose.Types.ObjectId.isValid(bus) ||
-      !mongoose.Types.ObjectId.isValid(route)
+      !mongoose.Types.ObjectId.isValid(route) ||
+      (driver && !mongoose.Types.ObjectId.isValid(driver))
     ) {
       return res.status(400).json({
         message: "Invalid bus ID or route ID.",
@@ -328,12 +350,34 @@ router.post("/", async (req, res) => {
       });
     }
 
+    if (driver) {
+      const driverDocument = await User.findOne({ _id: driver, role: "DRIVER" });
+      if (!driverDocument) {
+        return res.status(400).json({ message: "Please select a valid driver account." });
+      }
+    }
+
     if (
       busDocument.status !== "ACTIVE" ||
       routeDocument.status !== "ACTIVE"
     ) {
       return res.status(400).json({
         message: "The bus and route must both be active.",
+      });
+    }
+
+    const conflictingTrip = await Trip.findOne({
+      $or: [
+        { bus },
+        ...(driver ? [{ driver }] : []),
+      ],
+      departureTime: { $lt: tripArrival },
+      arrivalTime: { $gt: tripDeparture },
+      status: { $nin: ["CANCELLED", "COMPLETED"] },
+    });
+    if (conflictingTrip) {
+      return res.status(409).json({
+        message: "The selected bus or driver is already assigned to an overlapping trip.",
       });
     }
 
@@ -386,6 +430,15 @@ router.post("/", async (req, res) => {
         });
       }
 
+      if (
+        (i < routeStops.length - 1 && !departure) ||
+        (i > 0 && !arrival)
+      ) {
+        return res.status(400).json({
+          message: `A required arrival or departure time is missing at stop ${stopTime.stopCode}.`,
+        });
+      }
+
       if (arrival && arrival < previousTime) {
         return res.status(400).json({
           message:
@@ -409,10 +462,20 @@ router.post("/", async (req, res) => {
       }
     }
 
+    if (
+      new Date(stopTimes[0].departureTime).getTime() !== tripDeparture.getTime() ||
+      new Date(stopTimes[stopTimes.length - 1].arrivalTime).getTime() !== tripArrival.getTime()
+    ) {
+      return res.status(400).json({
+        message: "Trip departure/arrival must match the first and last stop times.",
+      });
+    }
+
     // Create the trip
     const newTrip = await Trip.create({
       bus,
       route,
+      driver: driver || null,
       departureTime: tripDeparture,
       arrivalTime: tripArrival,
       fare,
@@ -421,7 +484,8 @@ router.post("/", async (req, res) => {
 
     const populatedTrip = await Trip.findById(newTrip._id)
       .populate("bus")
-      .populate("route");
+      .populate("route")
+      .populate("driver", "name email");
 
     return res.status(201).json({
       message: "Trip created successfully.",
@@ -433,6 +497,76 @@ router.post("/", async (req, res) => {
     return res.status(500).json({
       message: "Failed to create trip.",
     });
+  }
+});
+
+// PATCH /api/trips/:id/location - drivers can report a stop on their assigned route.
+router.patch("/:id/location", protect, authorizeRoles("DRIVER"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stopCode } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid trip ID." });
+    }
+    if (typeof stopCode !== "string" || !stopCode.trim()) {
+      return res.status(400).json({ message: "A valid stop code is required." });
+    }
+
+    const trip = await Trip.findOne({ _id: id, driver: req.user.id }).populate("route");
+    if (!trip) {
+      return res.status(404).json({ message: "Assigned trip not found." });
+    }
+    if (!trip.route.stops.some((stop) => stop.stopCode === stopCode)) {
+      return res.status(400).json({ message: "The stop is not part of this trip's route." });
+    }
+    if (!["SCHEDULED", "IN_PROGRESS"].includes(trip.status)) {
+      return res.status(400).json({ message: "Location updates are unavailable for this trip." });
+    }
+
+    trip.currentStopCode = stopCode;
+    trip.locationUpdatedAt = new Date();
+    if (trip.status === "SCHEDULED") trip.status = "IN_PROGRESS";
+    await trip.save();
+
+    return res.status(200).json({
+      message: "Live location updated.",
+      currentStopCode: trip.currentStopCode,
+      locationUpdatedAt: trip.locationUpdatedAt,
+      status: trip.status,
+    });
+  } catch (error) {
+    console.error("Update trip location error:", error.message);
+    return res.status(500).json({ message: "Failed to update live location." });
+  }
+});
+
+// PATCH /api/trips/:id/status - assigned drivers can complete their trip.
+router.patch("/:id/status", protect, authorizeRoles("DRIVER"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid trip ID." });
+    }
+    if (!["IN_PROGRESS", "COMPLETED"].includes(status)) {
+      return res.status(400).json({ message: "Invalid driver trip status." });
+    }
+
+    const trip = await Trip.findOne({ _id: id, driver: req.user.id });
+    if (!trip) {
+      return res.status(404).json({ message: "Assigned trip not found." });
+    }
+    if (trip.status === "COMPLETED" || trip.status === "CANCELLED") {
+      return res.status(400).json({ message: "This trip is already closed." });
+    }
+
+    trip.status = status;
+    await trip.save();
+    return res.status(200).json({ message: "Trip status updated.", status: trip.status });
+  } catch (error) {
+    console.error("Update trip status error:", error.message);
+    return res.status(500).json({ message: "Failed to update trip status." });
   }
 });
 

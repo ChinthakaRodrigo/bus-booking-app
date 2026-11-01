@@ -1,7 +1,6 @@
 
 import { useState } from "react";
-
-const API_URL = "http://localhost:5000/api";
+import { API_URL } from "../services/api";
 
 export default function Auth({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);

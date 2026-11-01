@@ -1,8 +1,7 @@
 
 import { useEffect, useState } from "react";
 import "./MyBookings.css";
-
-const API_URL = "http://localhost:5000/api";
+import { API_URL } from "../services/api";
 
 function MyBookings({ onBack }) {
   const [bookings, setBookings] = useState([]);
@@ -134,6 +133,41 @@ function MyBookings({ onBack }) {
                 <p>
                   <strong>Booking reference:</strong> {booking._id}
                 </p>
+                {booking.status !== "CANCELLED" && (
+                  <button
+                    type="button"
+                    className="back-button"
+                    onClick={async () => {
+                      try {
+                        const token = localStorage.getItem("busgoToken");
+                        const response = await fetch(
+                          `${API_URL}/bookings/${booking._id}/cancel`,
+                          {
+                            method: "PATCH",
+                            headers: {
+                              Authorization: ["Bearer", token].join(" "),
+                            },
+                          }
+                        );
+                        const result = await response.json();
+                        if (!response.ok) {
+                          throw new Error(result.message || "Could not cancel booking.");
+                        }
+                        setBookings((current) =>
+                          current.map((item) =>
+                            item._id === booking._id
+                              ? { ...item, status: result.booking.status }
+                              : item
+                          )
+                        );
+                      } catch (err) {
+                        setError(err.message);
+                      }
+                    }}
+                  >
+                    Cancel booking
+                  </button>
+                )}
               </div>
             );
           })}

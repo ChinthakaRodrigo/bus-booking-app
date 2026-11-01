@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 
 const Booking = require("../models/Booking");
 const Trip = require("../models/Trip");
+const { authorizeRoles } = require("../middleware/authMiddleware");
 
 
 const router = express.Router();
@@ -12,10 +13,9 @@ const router = express.Router();
 // ======================================================
 // GET ALL BOOKINGS
 // GET /api/bookings
-// Development only: protect this endpoint with admin
-// authorization before deploying the application.
+// Only administrators can view all passenger bookings.
 // ======================================================
-router.get("/", async (req, res) => {
+router.get("/", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     const bookings = await Booking.find()
       .populate({
@@ -176,7 +176,7 @@ router.get("/my", protect, async (req, res) => {
 // GET ONE BOOKING
 // GET /api/bookings/:id
 // ======================================================
-router.get("/:id", async (req, res) => {
+router.get("/:id", protect, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -200,6 +200,10 @@ router.get("/:id", async (req, res) => {
       });
     }
 
+    if (req.user.role !== "ADMIN" && String(booking.user) !== req.user.id) {
+      return res.status(403).json({ message: "You cannot access this booking." });
+    }
+
     return res.status(200).json(booking);
   } catch (error) {
     console.error("Get booking error:", error.message);
@@ -214,7 +218,7 @@ router.get("/:id", async (req, res) => {
 // CREATE A BOOKING
 // POST /api/bookings
 // ======================================================
-router.post("/",protect, async (req, res) => {
+router.post("/", protect, authorizeRoles("USER", "PASSENGER"), async (req, res) => {
   try {
   const {
     tripId,
@@ -400,6 +404,7 @@ router.post("/",protect, async (req, res) => {
     // Create booking
     const booking = await Booking.create({
       trip: trip._id,
+      user: userId,
       passengerName: passengerName.trim(),
       passengerPhone: passengerPhone.trim(),
       seatNumber: seatText,
@@ -419,6 +424,32 @@ router.post("/",protect, async (req, res) => {
     return res.status(500).json({
       message: "Failed to create booking.",
     });
+  }
+});
+
+// Cancel a booking owned by the signed-in passenger.
+router.patch("/:id/cancel", protect, authorizeRoles("USER", "PASSENGER"), async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: "Invalid booking ID." });
+    }
+    const booking = await Booking.findOne({ _id: req.params.id, user: req.user.id });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found." });
+    }
+    if (booking.status === "CANCELLED") {
+      return res.status(400).json({ message: "This booking is already cancelled." });
+    }
+    if (booking.status !== "PENDING" && booking.status !== "CONFIRMED") {
+      return res.status(400).json({ message: "This booking cannot be cancelled." });
+    }
+
+    booking.status = "CANCELLED";
+    await booking.save();
+    return res.status(200).json({ message: "Booking cancelled.", booking });
+  } catch (error) {
+    console.error("Cancel booking error:", error.message);
+    return res.status(500).json({ message: "Failed to cancel booking." });
   }
 });
 

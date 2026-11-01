@@ -35,6 +35,12 @@ const tripSchema = new mongoose.Schema(
       required: true
     },
 
+    driver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+
     departureTime: {
       type: Date,
       required: true
@@ -60,6 +66,16 @@ const tripSchema = new mongoose.Schema(
       type: String,
       enum: ["SCHEDULED", "IN_PROGRESS", "COMPLETED", "CANCELLED"],
       default: "SCHEDULED"
+    },
+
+    currentStopCode: {
+      type: String,
+      default: ""
+    },
+
+    locationUpdatedAt: {
+      type: Date,
+      default: null
     }
   },
   { timestamps: true }

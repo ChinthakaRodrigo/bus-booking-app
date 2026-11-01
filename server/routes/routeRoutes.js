@@ -2,6 +2,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Route = require("../models/Route");
+const { protect, authorizeRoles } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -43,7 +44,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // POST: Create a route
-router.post("/", async (req, res) => {
+router.post("/", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     const { routeName, stops } = req.body;
 
@@ -105,7 +106,7 @@ router.post("/", async (req, res) => {
 });
 
 // PATCH: Activate or deactivate a route
-router.patch("/:id/status", async (req, res) => {
+router.patch("/:id/status", protect, authorizeRoles("ADMIN"), async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
       return res.status(400).json({

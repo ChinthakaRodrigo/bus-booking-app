@@ -1,12 +1,11 @@
 
 import { useEffect, useState } from "react";
 import "./BookingForm.css";
+import { API_URL } from "../services/api";
 
-const API_URL = "http://localhost:5000/api";
-
-export default function BookingForm({ trip, from, to, onClose }) {
+export default function BookingForm({ trip, from, to, user, onClose }) {
   const [seatNumber, setSeatNumber] = useState("");
-  const [passengerName, setPassengerName] = useState("");
+  const [passengerName, setPassengerName] = useState(user?.name || "");
   const [passengerPhone, setPassengerPhone] = useState("");
 
   const [bookedSeats, setBookedSeats] = useState([]);
@@ -96,6 +95,14 @@ export default function BookingForm({ trip, from, to, onClose }) {
 
     try {
       const token = localStorage.getItem("busgoToken");
+      const bookingData = {
+        tripId: trip.tripId,
+        passengerName: passengerName.trim(),
+        passengerPhone: passengerPhone.trim(),
+        seatNumber,
+        fromStopCode: from,
+        toStopCode: to,
+      };
 
       const response = await fetch(`${API_URL}/bookings`, {
         method: "POST",

@@ -4,8 +4,8 @@ import "./App.css";
 import BookingForm from "./components/BookingForm";
 import Auth from "./components/Auth";
 import MyBookings from "./components/MyBookings";
-
-const API_URL = "http://localhost:5000/api";
+import { AdminDashboard, DriverDashboard } from "./components/RoleDashboards";
+import { API_URL, apiRequest } from "./services/api";
 
 // Get today's date using local time.
 function getToday() {
@@ -61,6 +61,7 @@ function App() {
 const [token, setToken] = useState(
   () => localStorage.getItem("busgoToken") || ""
 );
+  const tripIds = trips.map((trip) => trip.tripId).join(",");
 
   // Load available stops from the backend.
   useEffect(() => {
@@ -106,6 +107,41 @@ const [token, setToken] = useState(
 
     loadStops();
   }, []);
+
+  useEffect(() => {
+    if (!searched || !tripIds) return undefined;
+    let active = true;
+    async function refreshLiveLocations() {
+      try {
+        const updates = await Promise.all(
+          tripIds.split(",").map(async (tripId) => {
+            const trip = await apiRequest(`/trips/${tripId}`);
+            return {
+              tripId,
+              currentStopCode: trip.currentStopCode,
+              locationUpdatedAt: trip.locationUpdatedAt,
+              status: trip.status,
+            };
+          })
+        );
+        if (active) {
+          setTrips((current) => current.map((trip) => {
+            const update = updates.find((item) => item.tripId === trip.tripId);
+            return update ? { ...trip, ...update } : trip;
+          }));
+        }
+      } catch (requestError) {
+        if (active) setError(`Live trip updates could not be refreshed: ${requestError.message}`);
+      }
+    }
+
+    refreshLiveLocations();
+    const timer = window.setInterval(refreshLiveLocations, 20000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [searched, tripIds]);
 
   // Search for buses.
   async function handleSearch(event) {
@@ -184,6 +220,12 @@ function handleLogout() {
 
 if (!user || !token) {
   return <Auth onLogin={handleLogin} />;
+}
+if (user.role === "ADMIN") {
+  return <AdminDashboard user={user} token={token} onLogout={handleLogout} />;
+}
+if (user.role === "DRIVER") {
+  return <DriverDashboard user={user} token={token} onLogout={handleLogout} />;
 }
  if (showMyBookings) {
   return (
@@ -467,13 +509,19 @@ if (!user || !token) {
                     <span className="status-dot" />
                     {(trip.status || "SCHEDULED").replaceAll("_", " ")}
                   </span>
+                  <span className="live-location">
+                    {trip.currentStopCode
+                      ? `Live: ${getStopName(trip.currentStopCode)}${trip.locationUpdatedAt ? ` · ${formatTime(trip.locationUpdatedAt)}` : ""}`
+                      : "Live location not reported"}
+                  </span>
 
                   <button
                     type="button"
                     className="book-button"
+                    disabled={trip.status !== "SCHEDULED"}
                     onClick={() => setSelectedTrip(trip)}
                   >
-                    Book this bus
+                    {trip.status === "SCHEDULED" ? "Book this bus" : "Booking closed"}
                   </button>
                 </div>
               </article>
@@ -499,6 +547,7 @@ if (!user || !token) {
           trip={selectedTrip}
           from={from}
           to={to}
+          user={user}
           onClose={() => setSelectedTrip(null)}
         />
       )}
