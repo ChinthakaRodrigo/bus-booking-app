@@ -95,19 +95,15 @@ export default function BookingForm({ trip, from, to, onClose }) {
     setSubmitting(true);
 
     try {
+      const token = localStorage.getItem("busgoToken");
+
       const response = await fetch(`${API_URL}/bookings`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          tripId: trip.tripId,
-          passengerName: passengerName.trim(),
-          passengerPhone: passengerPhone.trim(),
-          seatNumber,
-          fromStopCode: from,
-          toStopCode: to,
-        }),
+        body: JSON.stringify(bookingData)
       });
 
       const data = await response.json();

@@ -3,6 +3,7 @@ const cors = require("cors");
 const routeRoutes = require("./routes/routeRoutes");
 const tripRoutes = require("./routes/tripRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
+const authRoutes = require("./routes/authRoutes");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
@@ -26,6 +27,7 @@ const startServer = async () => {
   app.use("/api/routes", routeRoutes);
   app.use("/api/trips", tripRoutes);
   app.use("/api/bookings", bookingRoutes);
+  app.use("/api/auth", authRoutes);
 
   const PORT = process.env.PORT || 5000;
 

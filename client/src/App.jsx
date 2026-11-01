@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import BookingForm from "./components/BookingForm";
+import Auth from "./components/Auth";
+import MyBookings from "./components/MyBookings";
 
 const API_URL = "http://localhost:5000/api";
 
@@ -45,8 +47,20 @@ function App() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+  const [showMyBookings, setShowMyBookings] = useState(false);
 
   const [selectedTrip, setSelectedTrip] = useState(null);
+  const [user, setUser] = useState(() => {
+  try {
+    return JSON.parse(localStorage.getItem("busgoUser")) || null;
+  } catch {
+    return null;
+  }
+});
+
+const [token, setToken] = useState(
+  () => localStorage.getItem("busgoToken") || ""
+);
 
   // Load available stops from the backend.
   useEffect(() => {
@@ -151,7 +165,37 @@ function App() {
     );
   }
 
+  // Handle user login and logout.
+  function handleLogin(userData, jwtToken) {
+  setUser(userData);
+  setToken(jwtToken);
+}
+
+function handleLogout() {
+  localStorage.removeItem("busgoToken");
+  localStorage.removeItem("busgoUser");
+
+  setUser(null);
+  setToken("");
+  setSelectedTrip(null);
+  setTrips([]);
+  setSearched(false);
+}
+
+if (!user || !token) {
+  return <Auth onLogin={handleLogin} />;
+}
+ if (showMyBookings) {
   return (
+    <MyBookings
+      onBack={() => setShowMyBookings(false)}
+    />
+  );
+}
+
+  return (
+   
+
     <div className="app">
       {/* Navigation */}
       <header className="navbar">
@@ -164,14 +208,19 @@ function App() {
           <a href="#search">Find Buses</a>
           <a href="#results">Timetable</a>
 
+          <span className="nav-user">
+            Hello, {user.name}
+          </span>
+          <button onClick={() => setShowMyBookings(true)}>
+            My Bookings
+          </button>
+
           <button
             type="button"
             className="nav-button"
-            onClick={() => {
-              alert("My Bookings page will be implemented later.");
-            }}
-          >
-            My Bookings
+            onClick={handleLogout}
+            >
+              Log out
           </button>
         </nav>
       </header>

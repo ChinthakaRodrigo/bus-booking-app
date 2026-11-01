@@ -1,4 +1,5 @@
 
+const { protect } = require("../middleware/authMiddleware");
 const express = require("express");
 const mongoose = require("mongoose");
 
@@ -142,6 +143,34 @@ router.get("/availability", async (req, res) => {
   }
 });
 
+// ======================================================
+// GET BOOKINGS FOR THE LOGGED-IN USER
+// GET /api/bookings/my
+// ======================================================
+router.get("/my", protect, async (req, res) => {
+  try {
+    const bookings = await Booking.find({
+      user: req.user.id
+    })
+      .populate({
+        path: "trip",
+        populate: [
+          { path: "bus" },
+          { path: "route" }
+        ]
+      })
+      .sort({ createdAt: -1 });
+
+    res.json(bookings);
+
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch your bookings.",
+      error: error.message
+    });
+  }
+});
+
 
 // ======================================================
 // GET ONE BOOKING
@@ -185,16 +214,19 @@ router.get("/:id", async (req, res) => {
 // CREATE A BOOKING
 // POST /api/bookings
 // ======================================================
-router.post("/", async (req, res) => {
+router.post("/",protect, async (req, res) => {
   try {
-    const {
-      tripId,
-      passengerName,
-      passengerPhone,
-      seatNumber,
-      fromStopCode,
-      toStopCode,
-    } = req.body;
+  const {
+    tripId,
+    passengerName,
+    passengerPhone,
+    seatNumber,
+    fromStopCode,
+    toStopCode,
+  } = req.body;
+
+  const userId = req.user.id;
+
 
     // Validate required fields
     if (
